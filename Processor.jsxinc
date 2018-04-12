@@ -1,0 +1,813 @@
+dbgalert = function() {}
+
+var isArray = function(obj_or_array) {
+    return Object.prototype.toString.call(obj_or_array) === '[object Array]'
+}
+
+if(!Object.keys) {
+    Object.keys = function (obj) {
+        var keys = [];
+
+        for (var k in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, k)) {
+                keys.push(k);
+            }
+        }
+
+        return keys;
+    };
+}
+
+function get_height(layer, as) {
+    return layer.bounds[3].as(as) - layer.bounds[1].as(as)
+}
+
+function get_width(layer, as) {
+    return layer.bounds[2].as(as) - layer.bounds[0].as(as)
+}
+
+CenterToLayer = function(center_layer_name) {
+    // center on specific layer
+    this.perform = function(doc, layer) {
+        var container = layers.find(doc, center_layer_name)
+
+        if(!container) {
+            return;
+        }
+
+        width = get_width(layer, 'px')
+        container_width = get_width(container, 'px')
+
+        height = get_height(layer, 'px')
+        container_height = get_height(container, 'px')
+
+        translation_x = container.bounds[0].as('px') + container_width/2 - width/2 - layer.bounds[0].as('px')
+        translation_y = container.bounds[1].as('px') + container_height/2 - height/2 - layer.bounds[1].as('px')
+
+        layer.translate(new UnitValue(translation_x, 'px'), new UnitValue(translation_y, 'px'))
+    }
+}
+
+DefaultCentering = function() {
+    // center this in the middle of the document
+    this.perform = function(doc, layer) {
+        width = get_width(layer, 'px')
+        container_width = doc.width.as('px')
+
+        height = get_height(layer, 'px')
+        container_height = doc.height.as('px')
+
+        translation_x = container_width/2 - width/2 - layer.bounds[0].as('px')
+        translation_y = container_height/2 - height/2 - layer.bounds[1].as('px')
+
+        layer.translate(new UnitValue(translation_x, 'px'), new UnitValue(translation_y, 'px'))
+    }
+}
+
+NoPositioning = function() {
+    this.perform = function() {}
+}
+
+DefaultBoundary = function() {
+    this.get = function(doc) {
+        return {
+            width: doc.width,
+            height: doc.height,
+        }
+    }
+}
+
+BoundaryLayer = function(layer_name) {
+    this.get = function(doc) {
+        var layer = layers.find(doc, layer_name);
+
+        if(!layer) {
+            var boundary = new DefaultBoundary();
+            return boundary.get(doc);
+        }
+
+        return {
+            width: new UnitValue(get_width(layer, 'px'), 'px'),
+            height: new UnitValue(get_height(layer, 'px'), 'px'),
+        }
+    }
+}
+
+Boundary = function(x, y) {
+    this.get = function(doc) {
+        return {
+            width: new UnitValue(x),
+            height: new UnitValue(y),
+        }
+    }
+}
+
+_SizerPrototype = {
+    getScaleFactor: function(layer, boundary) {
+        var width = get_width(layer, 'px')
+        var height = get_height(layer, 'px')
+
+        var height_scale_factor = 100 * boundary.height.as('px') / height
+        var width_scale_factor = 100 * boundary.width.as('px') / width
+
+        return Math.min(height_scale_factor, width_scale_factor);
+    }
+}
+
+LayerSizer = function() {
+    // resize a layer to a specific boundary
+    this.perform = function(doc, layer, boundary) {
+        var scale_factor = this.getScaleFactor(layer, boundary)
+
+        if(scale_factor < 100) {
+            layer.resize(scale_factor, scale_factor, AnchorPosition.MIDDLECENTER);
+        }
+    }
+}
+
+LayerSizer.prototype = _SizerPrototype
+
+TextSizer = function() {
+    // resize layer's text to a specific boundary
+    // fail if you come under 1/2 of starting font size and mark the text background red (?)
+    this.perform = function(doc, layer, boundary) {
+        if(this.getScaleFactor(layer, boundary) > 100) {
+            return;
+        }
+
+        var original_size = layer.textItem.size.as('pt')
+        var original_text = layer.textItem.contents;
+
+        var sizer = this;
+
+        var stepping_down = function() {
+            var current_size = original_size - 1;
+
+            while(original_size/2 < current_size) {
+                layer.textItem.size = current_size + 'pt';
+
+                if(sizer.getScaleFactor(layer, boundary) > 100) {
+                    return current_size;
+                }
+
+                current_size--;
+            }
+
+            return 0;
+        }
+
+        var size = stepping_down();
+
+        if(size === 0) {
+            // mark as failed
+            var color =  new SolidColor();
+            color.rgb.red = 255;
+            color.rgb.blue = 0;
+            color.rgb.green = 0;
+
+            layer.textItem.color = color;
+            layer.textItem.contents = original_text;
+            layer.textItem.size = original_size + 'pt';
+
+            return;
+        }
+    }
+}
+
+TextSizer.prototype = _SizerPrototype
+
+LayerTools = function() {}
+
+LayerTools.prototype = {
+    find: function(ref, name) {
+    	// declare local variables
+    	var layers = ref.layers;
+    	var len = layers.length;
+
+    	// iterate through layers to find a match
+    	for (var i = 0; i < len; i++) {
+    		// test for matching layer
+    		var layer = layers[i];
+    		if (layer.name.toLowerCase() == name.toLowerCase()) {
+    			return layer
+    		} else if (layer.typename == 'LayerSet') {
+    			layer = this.find(layer, name);
+                if(layer) {
+                    return layer;
+                }
+    		}
+    	}
+    },
+
+    select: function(ref, name) {
+        activeDocument.activeLayer = this.find(ref, name)
+    },
+
+    toggle: function(ref, name, toggle) {
+        this.find(ref, name).visible = toggle
+    },
+
+    remove: function(ref, name) {
+        this.find(ref, name).remove()
+    },
+}
+
+layers = new LayerTools();
+
+_LayerTransformPrototype = {
+    sizing: new DefaultBoundary(),
+    positioning: new NoPositioning(),
+
+    withBoundaryLayer: function(boundary_layer) {
+        this.sizing = new BoundaryLayer(boundary_layer);
+
+        return this;
+    },
+
+    withBoundary: function(x, y) {
+        this.sizing = new Boundary(x, y);
+
+        return this;
+    },
+
+    centerToLayer: function(layer) {
+        this.positioning = new CenterToLayer(layer);
+
+        return this;
+    },
+
+    centerToBoundaryLayer: function(boundary_layer) {
+        this.withBoundaryLayer(boundary_layer);
+        this.centerToLayer(boundary_layer);
+
+        return this;
+    },
+
+    getLayerName: function() {
+        return this.layer;
+    },
+
+    getLayer: function(doc) {
+        return layers.find(doc, this.layer);
+    },
+
+    showLayer: function(doc) {
+        layers.toggle(doc, this.getLayerName(), 1)
+    },
+
+    hideLayer: function(doc) {
+        layers.toggle(doc, this.getLayerName(), 0)
+    },
+}
+
+TextOnLayerTransform = function(layer) {
+    this.layer = layer;
+    this.type = 'putTextOnLayer';
+    this.toggleLayerOnNullData = true;
+    this.sizer = new TextSizer();
+
+    this.perform = function(doc, getter, ctx, accessor) {
+        dbgalert("I would perform " + this.type + "." + this.getLayerName() + " with data:" + getter());
+
+        var layer = this.getLayer(doc)
+
+        if(!layer) {
+            return;
+        }
+
+        if(layer.kind != LayerKind.TEXT) {
+            return;
+        }
+
+        layer.textItem.contents = getter();
+
+        return layer;
+    }
+}
+
+TextOnLayerTransform.prototype = _LayerTransformPrototype
+
+TextReplaceOnLayerTransform = function(layer) {
+    this.layer = layer;
+    this.type = 'replaceTextOnLayer';
+    this.toggleLayerOnNullData = true;
+    this.sizer = new TextSizer();
+
+    this.perform = function(doc, getter, ctx, accessor) {
+        var layer = this.getLayer(doc)
+
+        if(!layer) {
+            return;
+        }
+
+        if(layer.kind != LayerKind.TEXT) {
+            return;
+        }
+
+        var text = layer.textItem.contents.replace(/\{([^\}]+)\}/g, function(match, fmt) {
+            var n = +fmt;
+
+            // xxx check undefined
+            if(!isNaN(n)) {
+                return getter()[n];
+            }
+
+            return getter(fmt);
+        });
+
+        layer.textItem.contents = text;
+    }
+}
+
+TextReplaceOnLayerTransform.prototype = _LayerTransformPrototype
+
+TextVariationOnLayerTransform = function(layer) {
+    this.layer = layer;
+    this.type = 'putTextVariationOnLayer';
+    this.toggleLayerOnNullData = true;
+    this.sizer = new TextSizer();
+
+    var _datasource = function(accessor, layer) {
+        return accessor.data('choices');
+    };
+
+    this.separatedBy = function(sep) {
+        _datasource = function(accessor, layer) {
+            return layer.textItem.contents.split(sep);
+        }
+
+        return this;
+    }
+
+    this.fromChoices = function(choices) {
+        _datasource = function(accessor, layer) {
+            return choices;
+        }
+
+        return this;
+    }
+
+    this.perform = function(doc, getter, ctx, accessor) {
+        var layer = this.getLayer(doc)
+
+        if(!layer) {
+            return;
+        }
+
+        if(layer.kind != LayerKind.TEXT) {
+            return;
+        }
+
+        var choices = _datasource(accessor, layer)
+
+        dbgalert("I would perform " + this.type + "." + this.getLayerName() + " with data:" + choices[getter()]);
+
+        layer.textItem.contents = choices[getter()];
+
+        return layer;
+    }
+}
+
+TextVariationOnLayerTransform.prototype = _LayerTransformPrototype
+
+AddImageLayerTransform = function(layer) {
+    this.layer = layer;
+    this.type = 'addImageLayer';
+    this.sizer = new LayerSizer();
+    this.positioning = new DefaultCentering();
+
+    this.perform = function(doc, getter, ctx, accessor) {
+        dbgalert("I would perform " + this.type + "." + this.getLayerName() + " with data:" + getter());
+
+        var file = new File(ctx.path(getter()));
+
+        if(!file.exists) {
+            return;
+        }
+
+        var imageDoc = app.open(file, undefined, true);
+        var layer = imageDoc.artLayers[0].duplicate(doc);
+        imageDoc.close(SaveOptions.DONOTSAVECHANGES);
+
+        layer.name = this.getLayerName();
+
+        return layer;
+    }
+}
+
+AddImageLayerTransform.prototype = _LayerTransformPrototype
+
+TransformContainer = function() {
+    this.transforms = []
+
+    var _cont = this;
+
+    var _addTransform = function(Klass, layer) {
+        var transform = new Klass(layer);
+
+        _cont.transforms.push(transform);
+
+        return transform;
+    }
+
+    this.putTextOnLayer = function(layer) {
+        return _addTransform(TextOnLayerTransform, layer);
+    }
+
+    this.putTextVariationOnLayer = function(layer) {
+        return _addTransform(TextVariationOnLayerTransform, layer);
+    }
+
+    this.addImageLayer = function(layer) {
+        return _addTransform(AddImageLayerTransform, layer);
+    }
+
+    this.replaceTextOnLayer = function(layer) {
+        return _addTransform(TextReplaceOnLayerTransform, layer);
+    }
+}
+
+DataAccessor = function(transform, data) {
+    this.transform = transform
+    this.bound_data = data
+
+    this.getKey = function(subkey) {
+        if(!subkey) {
+            return this.transform.type + '.' + this.transform.getLayerName()
+        }
+
+        return this.transform.type + '.' + this.transform.getLayerName() + '.' + subkey
+    }
+
+    this.data = function(subkey) {
+        return this.bound_data[this.getKey(subkey)]
+    }
+
+    this.createDataGetter = function(index, i) {
+        var accessor = this;
+
+        // get numeric index
+        if(typeof(i) == "string") {
+            i = index.map(i);
+        }
+
+        return function(subkey) {
+            var data = accessor.data(subkey);
+
+            if(!data) {
+                return undefined;
+            }
+
+            if(isArray(data)) {
+                return data[i];
+            }
+
+            return data[index.at(i)]
+        }
+    }
+}
+
+DataAccessor.forTransform = function(map, transform, data) {
+    var key = transform.type + '.' + transform.getLayerName()
+
+    if(map[key]) {
+        return map[key]
+    }
+
+    map[key] = new DataAccessor(transform, data)
+
+    return map[key]
+}
+
+
+IndexObject = function() {
+    var _map = {}
+    var _list = []
+
+    this.length = 0
+
+    this.addSuffix = function(suffix) {
+        if(typeof(_map[suffix]) !== 'undefined') {
+            return;
+        }
+
+        _list.push(suffix)
+        _map[suffix] = this.length
+        this.length++
+    }
+
+    this.addFixedSuffix = function(i, suffix) {
+        // XXX it could fail on edge cases
+        if(typeof(_map[suffix]) !== 'undefined') {
+            return;
+        }
+
+        // make sure the list has enough elements
+        this.setMinLength(i + 1)
+
+        _list[i] = suffix
+        _map[suffix] = i
+    }
+
+    this.add = function() {
+        _list.push(this.length)
+        this.length++
+    }
+
+    this.getIndexBySuffix = function(suffix) {
+        return _map[suffix]
+    }
+
+    this.items = function() {
+        return _list
+    }
+
+    this.setMinLength = function(min_length) {
+        while(this.length < min_length) {
+            this.add();
+        }
+    }
+
+    this.addSuffixes = function(list) {
+        for(var i = 0; i < list.length; i++) {
+            this.addSuffix(list[i])
+        }
+    }
+
+    this.addFixedSuffixes = function(list) {
+        for(var i = 0; i < list.length; i++) {
+            this.addFixedSuffix(i, list[i])
+        }
+    }
+
+    this.at = function(i) {
+        return _list[i];
+    }
+
+    this.map = function(i) {
+        return _map[i];
+    }
+}
+
+Processor = function() {
+    var _callback;
+    var _data = {};
+    var _output;
+    var _merged = {}
+    var _prefix;
+
+    var _accessors = {}
+
+    var _save_output = function(doc, suffix, cb) {
+        var _save_single = function(format, config) {
+            var file = new File(_data.paths.output + '/' + format + '/' +  _prefix + '-' + suffix);
+
+            switch(format) {
+                case 'PSD':
+                case 'PDF':
+                    doc.saveAs(file, config, true, Extension.LOWERCASE);
+                    break;
+
+                case 'PNG':
+                case 'JPG':
+                case 'JPEG':
+                    doc.exportDocument(file, ExportType.SAVEFORWEB, config);
+                    break;
+            }
+
+            if(cb) {
+                cb(file);
+            }
+        }
+
+        for(format in _output) {
+            _save_single(format, _output[format]);
+        }
+
+        try {
+            doc.mergeVisibleLayers();
+        } catch(e) {}
+
+        for(format in _merged) {
+            _save_single(format, _merged[format]);
+        }
+    }
+
+    var _constructIndex = function(container, data) {
+        var index = new IndexObject();
+
+        // if suffixes is in data, add them to the index
+        if(data.suffixes) {
+            index.addSuffixes(data.suffixes)
+        }
+
+        // iterate through all transforms
+        for(var i = 0; i < container.transforms.length; i++) {
+            var accessor = DataAccessor.forTransform(_accessors, container.transforms[i], data);
+
+            var transform_data = accessor.data();
+
+            // skip transform if there is no data for it
+            if(!transform_data) {
+                continue;
+            }
+
+            if(isArray(transform_data)) {
+                // first try if the transform can guess suffixes
+                if(accessor.transform.getSuffixesFromData) {
+                    index.addFixedSuffixes(transform.getSuffixesFromData(transform_data))
+                }
+
+                // then assume numeric indexes are just fine
+                index.setMinLength(transform_data.length)
+            } else {
+                index.addSuffixes(Object.keys(transform_data))
+            }
+        }
+
+        return index;
+    }
+
+    var _process = function() {
+        var data = _data
+        var root_dir = data.paths.output
+
+        var root_folder = new Folder(root_dir);
+        if(!root_folder.exists) {
+            root_folder.create();
+        }
+
+        var createDirectories = function(dict) {
+            for(key in dict) {
+                var output_folder = new Folder(root_dir + '/' + key);
+                if(!output_folder.exists) {
+                    output_folder.create();
+                }
+            }
+        }
+
+        createDirectories(_output);
+        createDirectories(_merged);
+
+        var prefix_bits = app.activeDocument.name.split('.');
+        _prefix = prefix_bits.slice(0, prefix_bits.length - 1).join('.');
+
+        var container = new TransformContainer();
+
+        _callback(container);
+
+        var index = _constructIndex(container, data);
+        var suffixes = index.items();
+
+        var static_context = {
+            data: data,
+            path: function(filename) {
+                return data.paths.input + '/' + filename
+            },
+            container: container,
+        }
+
+        var operations = suffixes.length * (Object.keys(_output).length + Object.keys(_merged).length);
+
+        var win = new Window("palette{text:'Generating output files...',bounds:[100,100,580,140]," +
+               "progress:Progressbar{bounds:[20,10,460,30] , minvalue:0,value:0}};" );
+
+        var d = win.graphics;
+        //d.backgroundColor = d.newBrush(d.BrushType.SOLID_COLOR, [0.00, 0.00, 0.00, 1]);
+        win.progress.maxvalue = operations;
+        win.center();
+        win.show();
+
+        for(var i = 0; i < suffixes.length; i++) {
+            var docCopy = app.activeDocument.duplicate();
+
+            for(var j = 0; j < container.transforms.length; j++) {
+                var transform = container.transforms[j]
+                var accessor = DataAccessor.forTransform(_accessors, transform, data);
+
+                var getter = accessor.createDataGetter(index, i);
+
+                if(typeof(getter()) !== 'undefined' || transform.allowNullData) {
+                    var layer = transform.perform(docCopy, getter, static_context, accessor);
+
+                    if(layer) {
+                        transform.sizer.perform(docCopy, layer, transform.sizing.get(docCopy));
+                        transform.positioning.perform(docCopy, layer);
+                    }
+                } else if(transform.toggleLayerOnNullData) {
+                    transform.hideLayer(docCopy);
+                }
+            }
+
+            _save_output(docCopy, index.at(i), function() {
+                win.progress.value++;
+                win.layout.layout(true);
+            });
+
+            docCopy.close(SaveOptions.DONOTSAVECHANGES);
+        }
+    }
+
+    var _getDefaultSaveConfiguration = function(type) {
+        if(type === 'PSD') {
+            var psdOpts = new PhotoshopSaveOptions();
+        } else if (type === 'PDF') {
+            var psdOpts = new PDFSaveOptions();
+        }
+
+        psdOpts.embedColorProfile = true;
+        psdOpts.alphaChannels = true;
+        psdOpts.layers = true;
+
+        return psdOpts;
+    }
+
+    var _getDefaultExportConfiguration = function(type) {
+        var sfwOptions = new ExportOptionsSaveForWeb();
+
+        if(type === 'PNG') {
+            sfwOptions.format = SaveDocumentType.PNG;
+        } else if(type === 'JPG' || type ==='JPEG') {
+            sfwOptions.format = SaveDocumentType.JPEG;
+        }
+
+        sfwOptions.includeProfile = false;
+        sfwOptions.interlaced = 0;
+        sfwOptions.optimized = true;
+        sfwOptions.quality = 80;
+
+        return sfwOptions;
+    }
+
+    this.getDefaultConfiguration = function(type) {
+        switch(type) {
+            case 'PSD':
+            case 'PDF':
+                return _getDefaultSaveConfiguration(type);
+
+            case 'PNG':
+            case 'JPG':
+            case 'JPEG':
+                return _getDefaultExportConfiguration(type);
+        }
+    }
+
+    this.transform = function(callback) {
+        _callback = callback
+    }
+
+    this.data = function(data) {
+        _data = data
+    }
+
+    this.setOutput = function(output) {
+        if(typeof(output) == 'undefined') {
+            output = ['PSD', 'JPG', {format: 'PDF', merged: true}];
+        }
+
+        var real_output = {}
+
+        for(var i = 0; i < output.length; i++) {
+            var config = output[i];
+            var real_config;
+
+            if(typeof(config) == 'string') {
+                real_output[config] = this.getDefaultConfiguration(config)
+            } else if(config.typename) {
+                // if typename is present, the object is a genuine Photoshop *SaveOptions
+                // so we do not need to create defaults and override them
+                // XXX is typename a useful string for saving?
+                real_output[config.typename] = config;
+            } else {
+                real_config = this.getDefaultConfiguration(config.format)
+
+                // override attributes
+                for(var overrideKey in config) {
+                    if(overrideKey == 'merged' || overrideKey == 'format') {
+                        continue;
+                    }
+
+                    real_config[overrideKey] = config[overrideKey]
+                }
+
+                if(config.merged) {
+                    _merged[config.format] = real_config
+                } else {
+                    real_output[config.format] = real_config
+                }
+            }
+        }
+
+        _output = real_output
+    }
+
+    this.generate = function(data) {
+        this.data(data);
+        _process();
+    }
+
+    this.output = function(output) {
+        this.setOutput(output);
+        _process();
+    }
+}
