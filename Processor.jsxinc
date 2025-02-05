@@ -386,7 +386,8 @@ AddImageLayerTransform = function(layer) {
         }
 
         var imageDoc = app.open(file, undefined, true);
-        var layer = imageDoc.artLayers[0].duplicate(doc);
+        var targetLayer = doc.artLayers.getByName(this.layer);
+        var layer = imageDoc.artLayers[0].duplicate(targetLayer, ElementPlacement.PLACEBEFORE);
         imageDoc.close(SaveOptions.DONOTSAVECHANGES);
 
         layer.name = this.getLayerName();
